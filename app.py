@@ -115,7 +115,9 @@ def process_message(target_id, text, is_admin_sender):
         update_file_list()
 
     text_cleaned = text.lower().replace(" ", "")
-    pattern = r'(?:269|999)[a-z0-9]{6}'
+    
+    # [MODIFIED] ปรับขยายความยาวจาก 6 เป็น 7 เพื่อรองรับตัวเลขที่เพิ่มเข้ามาที่ท้ายสุด 1 หลัก
+    pattern = r'(?:269|999)[a-z0-9]{7}'
     valid_format_codes = re.findall(pattern, text_cleaned)
     
     if not valid_format_codes:
