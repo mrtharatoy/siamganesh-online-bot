@@ -6,7 +6,7 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-# --- CONFIG ---
+# --- CONFIG (สำหรับมหาบูชา) ---
 GITHUB_USERNAME = "mrtharatoy"
 REPO_NAME = "fb-mahabucha-bot"
 BRANCH = "main"
@@ -18,7 +18,7 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 CACHED_FILES = {}
 FILES_LOADED = False
 
-# --- 1. โหลดรายชื่อรูป ---
+# --- 1. โหลดรายชื่อรูป (Background) ---
 def update_file_list():
     global CACHED_FILES, FILES_LOADED
     print("🔄 Loading file list from GitHub...")
@@ -35,7 +35,6 @@ def update_file_list():
                 if item['type'] == 'file':
                     key = item['name'].rsplit('.', 1)[0].strip().lower()
                     temp_cache[key] = item['name']
-            
             CACHED_FILES = temp_cache
             FILES_LOADED = True
             print(f"✅ FILES READY: {len(CACHED_FILES)} images.")
@@ -51,40 +50,25 @@ def get_image_url(filename):
 def take_thread_control(recipient_id):
     params = {"access_token": PAGE_ACCESS_TOKEN}
     data = {"recipient": {"id": recipient_id}}
-    requests.post("https://graph.facebook.com/v19.0/me/take_thread_control", params=params, json=data)
+    r = requests.post("https://graph.facebook.com/v19.0/me/take_thread_control", params=params, json=data)
+    if r.status_code != 200:
+        print(f"⚠️ Take Control Failed: {r.text}")
 
-# --- ฟังก์ชันส่งข้อความ (แบบพยายามเต็มที่) ---
+# --- ฟังก์ชันส่งข้อความ ---
 def send_message(recipient_id, text):
     print(f"💬 Sending: {text}")
     params = {"access_token": PAGE_ACCESS_TOKEN}
-    headers = {"Content-Type": "application/json"}
-    
-    # ลองส่งแบบปกติก่อน (เพื่อความชัวร์)
     data = {
         "recipient": {"id": recipient_id},
         "message": {"text": text, "metadata": "BOT_SENT_THIS"}
     }
-    
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    
-    # ถ้าส่งไม่ผ่าน เพราะติดกฎ 24 ชม. (#10)
     if r.status_code != 200:
-        print(f"⚠️ Normal send failed ({r.status_code}). Trying Tag...")
-        # ลองส่งแบบติด Tag (The Hail Mary pass)
-        data_tag = {
-            "recipient": {"id": recipient_id},
-            "messaging_type": "MESSAGE_TAG",
-            "tag": "CONFIRMED_EVENT_UPDATE",
-            "message": {"text": text, "metadata": "BOT_SENT_THIS"}
-        }
-        r_tag = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data_tag)
-        print(f"👉 Tag Result: {r_tag.status_code} - {r_tag.text}")
+        print(f"❌ Send Text Error: {r.text}")
 
 def send_image(recipient_id, image_url):
     print(f"📤 Sending Image...")
     params = {"access_token": PAGE_ACCESS_TOKEN}
-    headers = {"Content-Type": "application/json"}
-    
     data = {
         "recipient": {"id": recipient_id},
         "message": {
@@ -92,32 +76,20 @@ def send_image(recipient_id, image_url):
             "metadata": "BOT_SENT_THIS"
         }
     }
-    
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    
     if r.status_code != 200:
-        print(f"⚠️ Normal image failed. Trying Tag...")
-        data_tag = {
-            "recipient": {"id": recipient_id},
-            "messaging_type": "MESSAGE_TAG",
-            "tag": "CONFIRMED_EVENT_UPDATE",
-            "message": {
-                "attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}},
-                "metadata": "BOT_SENT_THIS"
-            }
-        }
-        r_tag = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data_tag)
-        print(f"👉 Tag Image Result: {r_tag.status_code}")
+        print(f"❌ Send Image Error: {r.text}")
 
-# --- 2. LOGIC ---
+# --- 2. LOGIC (มหาบูชา) ---
 def process_message(target_id, text, is_admin_sender):
     if not FILES_LOADED:
-        update_file_list()
+        print("⚠️ Waiting for files to load...")
+        return
 
     text_cleaned = text.lower().replace(" ", "")
     
-    # [MODIFIED] ปรับขยายความยาวจาก 6 เป็น 7 เพื่อรองรับตัวเลขที่เพิ่มเข้ามาที่ท้ายสุด 1 หลัก
-    pattern = r'(?:269|999)[a-z0-9]{7}'
+    # 📌 Pattern: หา 269 หรือ 999 ตามด้วยอะไรก็ได้อีก 6 ตัว
+    pattern = r'(?:269|999)[a-z0-9]{6}'
     valid_format_codes = re.findall(pattern, text_cleaned)
     
     if not valid_format_codes:
@@ -151,6 +123,7 @@ def process_message(target_id, text, is_admin_sender):
             
     if is_admin_sender: return 
 
+    # ⚠️ แจ้งเตือนรหัสผิด/หาไม่เจอ
     if unknown_codes:
         take_thread_control(target_id)
         msg = (
@@ -187,5 +160,6 @@ def webhook():
     return "ok", 200
 
 if __name__ == '__main__':
+    threading.Thread(target=update_file_list).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
