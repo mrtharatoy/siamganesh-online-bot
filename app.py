@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 # --- CONFIG ---
 GITHUB_USERNAME = "mrtharatoy"
-REPO_NAME = "fb-mahabucha-bot" # ถ้าจะใช้กับมูเตทีม ให้แก้ตรงนี้เป็น fb-muteteam-bot
+REPO_NAME = "fb-mahabucha-bot" # ถ้าจะใช้กับมูเตทีม ให้เปลี่ยนตรงนี้เป็น fb-muteteam-bot
 BRANCH = "main"
 FOLDER_NAME = "images" 
 PAGE_ACCESS_TOKEN = os.environ.get('PAGE_ACCESS_TOKEN')
@@ -17,6 +17,7 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
 CACHED_FILES = {}
 FILES_LOADED = False
+lock = threading.Lock() # ป้องกันการโหลดซ้ำซ้อน
 
 # --- 1. โหลดรายชื่อรูป ---
 def update_file_list():
@@ -44,9 +45,6 @@ def update_file_list():
     except Exception as e:
         print(f"❌ Error loading files: {e}")
 
-# 🔥 สั่งโหลดรูปเป็นแบคกราวด์ทันที (เพิ่ม daemon=True กัน Render ค้าง)
-threading.Thread(target=update_file_list, daemon=True).start()
-
 def get_image_url(filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename}"
 
@@ -61,64 +59,42 @@ def send_message(recipient_id, text):
     print(f"💬 Sending: {text}")
     params = {"access_token": PAGE_ACCESS_TOKEN}
     
-    # 1. ลองส่งแบบปกติก่อน
-    data = {
-        "recipient": {"id": recipient_id},
-        "message": {"text": text, "metadata": "BOT_SENT_THIS"}
-    }
+    data = {"recipient": {"id": recipient_id}, "message": {"text": text, "metadata": "BOT_SENT_THIS"}}
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
     
-    # 2. ถ้าติดกฎ 24 ชม. ให้ลองดัน Tag ทะลุไป
     if r.status_code != 200:
-        print(f"⚠️ Normal send failed ({r.status_code}). Trying Tag...")
-        data_tag = {
-            "recipient": {"id": recipient_id},
-            "messaging_type": "MESSAGE_TAG",
-            "tag": "CONFIRMED_EVENT_UPDATE",
-            "message": {"text": text, "metadata": "BOT_SENT_THIS"}
-        }
+        data_tag = {"recipient": {"id": recipient_id}, "messaging_type": "MESSAGE_TAG", "tag": "CONFIRMED_EVENT_UPDATE", "message": {"text": text, "metadata": "BOT_SENT_THIS"}}
         requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data_tag)
 
 def send_image(recipient_id, image_url):
     print(f"📤 Sending Image...")
     params = {"access_token": PAGE_ACCESS_TOKEN}
     
-    # 1. ลองส่งรูปแบบปกติ
-    data = {
-        "recipient": {"id": recipient_id},
-        "message": {
-            "attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}},
-            "metadata": "BOT_SENT_THIS"
-        }
-    }
+    data = {"recipient": {"id": recipient_id}, "message": {"attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}}, "metadata": "BOT_SENT_THIS"}}
     r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
     
-    # 2. ถ้าติดกฎ 24 ชม. ให้ลองดัน Tag ทะลุไป
     if r.status_code != 200:
-        print(f"⚠️ Normal image failed. Trying Tag...")
-        data_tag = {
-            "recipient": {"id": recipient_id},
-            "messaging_type": "MESSAGE_TAG",
-            "tag": "CONFIRMED_EVENT_UPDATE",
-            "message": {
-                "attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}},
-                "metadata": "BOT_SENT_THIS"
-            }
-        }
+        data_tag = {"recipient": {"id": recipient_id}, "messaging_type": "MESSAGE_TAG", "tag": "CONFIRMED_EVENT_UPDATE", "message": {"attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}}, "metadata": "BOT_SENT_THIS"}}
         requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data_tag)
 
 # --- 2. LOGIC ---
 def process_message(target_id, text, is_admin_sender):
-    # บังคับโหลดแบบฉุกเฉินถ้ายังไม่เสร็จ
+    global FILES_LOADED
+    
+    # 🔥 ระบบโหลดรูปแบบ "รอแป๊บเดียวได้เลย"
     if not FILES_LOADED:
-        print("⚠️ Files not loaded yet. Waiting...")
-        take_thread_control(target_id)
-        send_message(target_id, "⏳ ระบบกำลังเชื่อมต่อฐานข้อมูลภาพ กรุณารอประมาณ 1 นาที แล้วพิมพ์รหัสของท่านใหม่อีกครั้งนะครับ 🙏")
-        return 
+        with lock: # ให้บอททำงานทีละคิว จะได้ไม่ค้าง
+            if not FILES_LOADED:
+                take_thread_control(target_id)
+                send_message(target_id, "⏳ ระบบกำลังดึงข้อมูลภาพ กรุณารอสักครู่นะครับ...")
+                update_file_list() # โหลด 2 วินาที
+                if not FILES_LOADED:
+                    send_message(target_id, "❌ ขออภัยครับ ระบบดึงข้อมูลขัดข้อง รบกวนแจ้งแอดมินครับ 🙏")
+                    return
 
     text_cleaned = text.lower().replace(" ", "")
     
-    # ✅ ใช้ Regex ความยาว 7 หลักตามที่คุณต้องการ
+    # ใช้ Regex ความยาว 7 หลัก
     pattern = r'(?:269|999)[a-z0-9]{7}'
     valid_format_codes = re.findall(pattern, text_cleaned)
     
