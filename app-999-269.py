@@ -111,7 +111,7 @@ def process_message(target_id, text, is_admin_sender):
 
     # ตรวจสอบรหัสที่พิมพ์ขาด/เกิน
     for code in all_attempts:
-        if len(code) >= 5: # พิมพ์มาเกิน 5 ตัวถึงจะถือว่าตั้งใจพิมพ์รหัส (กันคนพิมพ์แค่ "999" เฉยๆ)
+        if len(code) >= 5: 
             if code not in valid_codes and code not in unknown_codes:
                 matched = next((k for k in CACHED_FILES.keys() if k in code), None)
                 if matched:
@@ -121,16 +121,17 @@ def process_message(target_id, text, is_admin_sender):
                     unknown_codes.append(code)
 
     if not found_actions and not unknown_codes:
-        return # ไม่มีการพิมพ์รหัสใดๆ เกิดขึ้น
+        return 
 
     if found_actions:
         take_thread_control(target_id)
+        
+        # 📌 ข้อความ Intro ที่อัปเดตใหม่
         intro_msg = (
             "📸 ขออนุญาตส่งภาพนะครับ\n\n"
             "รวมภาพงานพิธี กดได้ที่ link นี้\n\n"
-            " -> linktr.ee/mahabucha\n\n"
-            "หรือ รับชมได้ที่หน้าเพจ \"มหาบูชา\"\n\n"
-            "ทีมงานเทวาลัยสยามคเณศ ขอขอบคุณครับ"
+            " -> https://siamganesh-online.vercel.app/\n\n"
+            "หรือ รับชมได้ที่หน้าเพจ \"มหาบูชา\""
         )
         send_message(target_id, intro_msg)
 
@@ -138,7 +139,6 @@ def process_message(target_id, text, is_admin_sender):
             send_message(target_id, f"ภาพถาดถวาย รหัส : {code_key}")
             send_image(target_id, get_image_url(filename))
 
-    # ส่งข้อความเตือน (แม้ว่าคนพิมพ์จะเป็นแอดมินก็ตาม จะได้เทสระบบได้)
     if unknown_codes:
         take_thread_control(target_id)
         msg = (
