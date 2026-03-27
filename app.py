@@ -127,16 +127,17 @@ def process_message(target_id, text, is_admin_sender):
         send_message(target_id, intro_msg)
 
         for code_key, filename in found_actions:
-            send_message(target_id, f"ภาพถาดถวาย รหัส : {code_key}")
+            # 📌 แปลงรหัสเป็นพิมพ์ใหญ่ทั้งหมดด้วย .upper()
+            send_message(target_id, f"ภาพถาดถวาย รหัส : {code_key.upper()}")
             send_image(target_id, get_image_url(filename))
 
     if unknown_codes:
         take_thread_control(target_id)
-        # 📌 ข้อความแจ้งเตือนที่อัปเดตใหม่
+        # 📌 อัปเดตข้อความให้แอดมินมาตรวจสอบ
         msg = (
             "⚠️ ขออภัยครับ \n \n"
             "ไม่พบภาพถาดถวายจากรหัสของท่าน \n \n"
-            "รบกวนรอแอดมินเข้ามาตอบ ซักครู่นะครับ"
+            "รบกวนรอแอดมินเข้ามาตรวจสอบให้ ซักครู่นะครับ ⏳"
         )
         send_message(target_id, msg)
 
