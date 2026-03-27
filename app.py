@@ -17,7 +17,7 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
 CACHED_FILES = {}
 FILES_LOADED = False
-lock = threading.Lock()
+lock = threading.Lock() 
 
 # --- 1. โหลดรายชื่อรูป ---
 def update_file_list():
@@ -48,7 +48,7 @@ def update_file_list():
 def get_image_url(filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename}"
 
-# --- ฟังก์ชันแย่งไมค์ ---
+# --- ฟังก์ชันแย่งไมค์จาก Zwiz ---
 def take_thread_control(recipient_id):
     params = {"access_token": PAGE_ACCESS_TOKEN}
     data = {"recipient": {"id": recipient_id}}
@@ -73,7 +73,7 @@ def send_image(recipient_id, image_url):
         data_tag = {"recipient": {"id": recipient_id}, "messaging_type": "MESSAGE_TAG", "tag": "CONFIRMED_EVENT_UPDATE", "message": {"attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}}, "metadata": "BOT_SENT_THIS"}}
         requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data_tag)
 
-# --- 2. LOGIC ---
+# --- 2. LOGIC กรองรหัส ---
 def process_message(target_id, text, is_admin_sender):
     global FILES_LOADED
     
@@ -89,27 +89,21 @@ def process_message(target_id, text, is_admin_sender):
 
     text_cleaned = text.lower().replace(" ", "")
     
-    # 1. หารหัสที่ถูกต้องเป๊ะๆ (10 ตัวอักษร)
     exact_pattern = r'(?:269|999)[a-z0-9]{7}'
     valid_codes = re.findall(exact_pattern, text_cleaned)
-    
-    # 2. หารหัสที่พิมพ์ผิด (ขาด/เกิน) แต่พยายามพิมพ์แล้ว
     attempt_pattern = r'(?:269|999)[a-z0-9]*'
     all_attempts = re.findall(attempt_pattern, text_cleaned)
 
     found_actions = [] 
     unknown_codes = []
 
-    # ตรวจสอบรหัสเป๊ะๆ
     for code in valid_codes:
         if code in CACHED_FILES:
             if (code, CACHED_FILES[code]) not in found_actions:
                 found_actions.append((code, CACHED_FILES[code]))
         else:
-            if code not in unknown_codes:
-                unknown_codes.append(code)
+            if code not in unknown_codes: unknown_codes.append(code)
 
-    # ตรวจสอบรหัสที่พิมพ์ขาด/เกิน
     for code in all_attempts:
         if len(code) >= 5: 
             if code not in valid_codes and code not in unknown_codes:
@@ -120,13 +114,10 @@ def process_message(target_id, text, is_admin_sender):
                 else:
                     unknown_codes.append(code)
 
-    if not found_actions and not unknown_codes:
-        return 
+    if not found_actions and not unknown_codes: return 
 
     if found_actions:
         take_thread_control(target_id)
-        
-        # 📌 ข้อความ Intro ที่อัปเดตใหม่
         intro_msg = (
             "📸 ขออนุญาตส่งภาพนะครับ\n\n"
             "รวมภาพงานพิธี กดได้ที่ link นี้\n\n"
@@ -141,10 +132,11 @@ def process_message(target_id, text, is_admin_sender):
 
     if unknown_codes:
         take_thread_control(target_id)
+        # 📌 ข้อความแจ้งเตือนที่อัปเดตใหม่
         msg = (
             "⚠️ ขออภัยครับ \n \n"
-            "ไม่พบภาพถาดถวายของท่าน \n \n"
-            "เนื่องจากถาดของท่านยังไม่ได้รับการถวาย หรือรหัสที่ท่านพิมพ์เข้ามาผิดครับ 🙏"
+            "ไม่พบภาพถาดถวายจากรหัสของท่าน \n \n"
+            "รบกวนรอแอดมินเข้ามาตอบ ซักครู่นะครับ"
         )
         send_message(target_id, msg)
 
