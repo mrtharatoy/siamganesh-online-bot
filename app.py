@@ -140,36 +140,42 @@ def process_message(target_id, text, is_admin_sender):
         )
         send_message(target_id, msg)
 
-# --- โค้ดใหม่: สร้าง API ให้ Vercel เรียกใช้งาน ---
-@app.route('/api/search', methods=['GET'])
-def search_api():
-    code = request.args.get('code', '').lower().strip()
-    if not code:
-        return jsonify({"found": False, "message": "กรุณาระบุรหัสที่ต้องการค้นหา"}), 400
-
-    if not FILES_LOADED:
-        return jsonify({"found": False, "message": "ระบบกำลังเตรียมข้อมูล กรุณาลองใหม่ในอีก 1 นาที"}), 503
-
-    # ค้นหารหัสแบบเป๊ะๆ หรือแบบมีคำค้นหาอยู่ข้างใน
-    matched_filename = None
-    if code in CACHED_FILES:
-        matched_filename = CACHED_FILES[code]
-    else:
-        # ค้นหาแบบกว้าง (เผื่อพิมพ์มาไม่ครบ)
-        matched_key = next((k for k in CACHED_FILES.keys() if code in k), None)
-        if matched_key:
-            matched_filename = CACHED_FILES[matched_key]
-
-    if matched_filename:
-        image_url = get_image_url(matched_filename)
-        return jsonify({
-            "found": True, 
-            "code": code.upper(), 
-            "image_url": image_url
-        }), 200
-    else:
-        return jsonify({"found": False, "message": "ไม่พบรูปภาพจากรหัสนี้"}), 404
-
+    # --- โค้ด API สำหรับ Vercel (ปรับปรุงเป็น Exact Match) ---
+    @app.route('/api/search', methods=['GET'])
+    def search_api():
+        # 1. รับค่าที่แอดมินพิมพ์มา (ไม่ใช้ .lower() เพื่อรักษาตัวพิมพ์เล็ก-ใหญ่ไว้)
+        code = request.args.get('code', '').strip() 
+        
+        if not code:
+            return jsonify({"found": False, "message": "กรุณาระบุรหัสที่ต้องการค้นหา"}), 400
+    
+        if not FILES_LOADED:
+            return jsonify({"found": False, "message": "ระบบกำลังเตรียมข้อมูล กรุณาลองใหม่ในอีก 1 นาที"}), 503
+    
+        matched_filename = None
+        code_lower = code.lower() # แปลงชั่วคราวเพื่อไปควานหาในระบบ
+        
+        # 2. เช็คว่ารหัสนี้มีในระบบไหม
+        if code_lower in CACHED_FILES:
+            actual_filename = CACHED_FILES[code_lower] # ดึงชื่อไฟล์จริงออกมา (เช่น '269AbC1234.jpg')
+            exact_name_without_ext = actual_filename.rsplit('.', 1)[0] # ตัดนามสกุลไฟล์ออก
+            
+            # 3. นำชื่อไฟล์จริง มาเทียบกับรหัสที่พิมพ์มา "แบบตรงกันเป๊ะๆ (Exact Match)"
+            if exact_name_without_ext == code:
+                matched_filename = actual_filename
+    
+        # 4. ส่งผลลัพธ์กลับไปหา Vercel
+        if matched_filename:
+            image_url = get_image_url(matched_filename)
+            return jsonify({
+                "found": True, 
+                "code": code, 
+                "image_url": image_url
+            }), 200
+        else:
+            # ถ้าพิมพ์ผิดแม้แต่ตัวเดียว (เช่น พิมพ์เล็กแทนพิมพ์ใหญ่) หรือหาไม่เจอ จะเด้งมาตรงนี้ทันที
+            return jsonify({"found": False, "message": "ไม่พบรูปภาพจากรหัสนี้ (โปรดตรวจสอบตัวพิมพ์เล็ก-ใหญ่ให้ถูกต้อง)"}), 404
+            
 # --- 3. WEBHOOK ---
 @app.route('/', methods=['GET'])
 def verify():
