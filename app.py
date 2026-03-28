@@ -7,11 +7,11 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+CORS(app) # อนุญาตให้ Vercel โทรเข้ามาใช้งาน API ได้
 
-# --- CONFIG ---
+# --- CONFIG (มหาบูชา) ---
 GITHUB_USERNAME = "mrtharatoy"
-REPO_NAME = "fb-mahabucha-bot" # หรือ fb-muteteam-bot
+REPO_NAME = "fb-mahabucha-bot" # ถ้าทำของมูเตทีม อย่าลืมเปลี่ยนชื่อตรงนี้นะครับ
 BRANCH = "main"
 FOLDER_NAME = "images" 
 PAGE_ACCESS_TOKEN = os.environ.get('PAGE_ACCESS_TOKEN')
@@ -22,7 +22,7 @@ CACHED_FILES = {}
 FILES_LOADED = False
 lock = threading.Lock() 
 
-# --- 1. โหลดรายชื่อรูป ---
+# --- 1. โหลดรายชื่อรูปล่าสุดจาก GitHub ---
 def update_file_list():
     global CACHED_FILES, FILES_LOADED
     print("🔄 Loading file list from GitHub...")
@@ -37,8 +37,9 @@ def update_file_list():
             temp_cache = {}
             for item in data:
                 if item['type'] == 'file':
+                    # เก็บ key เป็นตัวพิมพ์เล็กทั้งหมด เพื่อให้ค้นหาได้ง่ายขึ้น
                     key = item['name'].rsplit('.', 1)[0].strip().lower()
-                    temp_cache[key] = item['name']
+                    temp_cache[key] = item['name'] # เก็บ value เป็นชื่อไฟล์จริง (รวมนามสกุลและตัวพิมพ์เล็ก/ใหญ่)
             
             CACHED_FILES = temp_cache
             FILES_LOADED = True
@@ -51,6 +52,7 @@ def update_file_list():
 def get_image_url(filename):
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/{FOLDER_NAME}/{filename}"
 
+# --- ฟังก์ชันสั่งงาน Facebook Messenger ---
 def take_thread_control(recipient_id):
     params = {"access_token": PAGE_ACCESS_TOKEN}
     data = {"recipient": {"id": recipient_id}}
@@ -138,9 +140,11 @@ def process_message(target_id, text, is_admin_sender):
         )
         send_message(target_id, msg)
 
-# --- 3. API สำหรับ Web Vercel (ปรับปรุง EXACT MATCH 10 หลัก) ---
+# --- 3. API สำหรับ Web Vercel (ดึงข้อมูลทันที & Exact Match) ---
 @app.route('/api/search', methods=['GET'])
 def search_api():
+    global FILES_LOADED
+    
     code = request.args.get('code', '').strip() 
     
     if not code:
@@ -150,8 +154,14 @@ def search_api():
     if not re.match(r'^(269|999)[A-Za-z0-9]{7}$', code):
         return jsonify({"found": False, "message": "รูปแบบรหัสไม่ถูกต้อง (ต้องมี 10 หลักพอดีเป๊ะ)"}), 400
 
+    # 🔥 ถ้าเซิร์ฟเพิ่งตื่นและยังไม่มีข้อมูล ให้ไปดึงจาก GitHub ทันที!
     if not FILES_LOADED:
-        return jsonify({"found": False, "message": "ระบบกำลังเตรียมข้อมูล กรุณาลองใหม่ในอีก 1 นาที"}), 503
+        with lock:
+            if not FILES_LOADED:
+                update_file_list()
+                
+    if not FILES_LOADED:
+        return jsonify({"found": False, "message": "ระบบกำลังเตรียมข้อมูลจาก GitHub กรุณากดค้นหาอีกครั้ง"}), 503
 
     matched_filename = None
     code_lower = code.lower()
@@ -171,17 +181,19 @@ def search_api():
             "found": True, 
             "code": code, 
             "image_url": image_url,
-            "filename": matched_filename # 👈 สิ่งที่เพิ่มเข้ามา: ชื่อไฟล์จริง (เช่น 269Bb01010.jpg)
+            "filename": matched_filename # ส่งชื่อไฟล์จริงกลับไปให้ระบบดาวน์โหลด
         }), 200
     else:
-        return jsonify({"found": False, "message": "ไม่พบรูปภาพจากรหัสนี้ (โปรดตรวจสอบตัวพิมพ์เล็ก-ใหญ่ให้ถูกต้อง)"}), 404
+        return jsonify({"found": False, "message": "ไม่พบรูปภาพ (โปรดตรวจสอบตัวพิมพ์เล็ก-ใหญ่ให้ถูกต้อง)"}), 404
 
 # --- 4. WEBHOOK ของ Facebook ---
 @app.route('/', methods=['GET'])
 def verify():
+    # Facebook Verify Token
     if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
         return request.args.get("hub.challenge"), 200
     
+    # หน้าเว็บแสดงสถานะบอท
     html_page = """
     <!DOCTYPE html>
     <html lang="th">
@@ -222,6 +234,7 @@ def webhook():
                         text = event['message'].get('text', '')
                         if event.get('message', {}).get('metadata') == "BOT_SENT_THIS": continue
                         
+                        # 🔥 ด่านสกัดกั้นข้อความเก่าค้างท่อ (กันบอทย้อนตอบตอนเปิดเซิร์ฟ)
                         message_timestamp = event.get('timestamp')
                         if message_timestamp:
                             current_time = int(time.time() * 1000)
