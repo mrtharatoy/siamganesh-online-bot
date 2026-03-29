@@ -9,12 +9,11 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# --- ⚙️ CONFIG (ฉบับ Backend รวมศูนย์) ---
+# --- ⚙️ 1. CONFIG ---
 GITHUB_USERNAME = "mrtharatoy"
-REPO_NAME = "siamganesh-online-backend" # 👈 ชี้ไปที่บ้านหลังใหม่แล้ว
+REPO_NAME = "siamganesh-online-backend"
 BRANCH = "main"
 
-# ดึงค่าจาก Environment Variables
 MAHABUCHA_PAGE_ID = os.environ.get('MAHABUCHA_PAGE_ID')
 MAHABUCHA_TOKEN = os.environ.get('MAHABUCHA_TOKEN')
 MUTETEAM_PAGE_ID = os.environ.get('MUTETEAM_PAGE_ID')
@@ -22,257 +21,136 @@ MUTETEAM_TOKEN = os.environ.get('MUTETEAM_TOKEN')
 VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN')
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 
-# แยกตะกร้าเก็บรูปเป็น 2 เพจ
-CACHED_FILES = {
-    "mahabucha": {},
-    "muteteam": {}
-}
+CACHED_FILES = {"mahabucha": {}, "muteteam": {}}
 FILES_LOADED = False
-lock = threading.Lock() 
+lock = threading.Lock()
 
-# --- 1. โหลดรายชื่อรูปจากทั้ง 2 โฟลเดอร์ ---
+# --- 📂 2. GITHUB FILES ---
 def update_file_list():
     global CACHED_FILES, FILES_LOADED
-    print("🔄 Loading file lists from GitHub...")
-    headers = {"User-Agent": "Bot", "Accept": "application/vnd.github.v3+json"}
+    print("🔄 Updating image list from GitHub...")
+    headers = {"User-Agent": "Siamganesh-Bot", "Accept": "application/vnd.github.v3+json"}
     if GITHUB_TOKEN: headers["Authorization"] = f"token {GITHUB_TOKEN}"
     
-    pages = ["mahabucha", "muteteam"]
-    
-    for page in pages:
+    for page in ["mahabucha", "muteteam"]:
         api_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{REPO_NAME}/contents/images/{page}?ref={BRANCH}"
         try:
             r = requests.get(api_url, headers=headers, timeout=15)
             if r.status_code == 200:
-                data = r.json()
-                temp_cache = {}
-                for item in data:
-                    if item['type'] == 'file' and item['name'] != '.keep': 
-                        key = item['name'].rsplit('.', 1)[0].strip().lower()
-                        temp_cache[key] = item['name']
+                temp_cache = {item['name'].rsplit('.', 1)[0].strip().lower(): item['name'] 
+                              for item in r.json() if item['type'] == 'file' and item['name'] != '.keep'}
                 CACHED_FILES[page] = temp_cache
-                print(f"✅ {page.upper()} READY: {len(temp_cache)} images.")
-            else:
-                print(f"⚠️ Github Error for {page}: {r.status_code} - {r.text}")
-        except Exception as e:
-            print(f"❌ Error loading files for {page}: {e}")
-            
+                print(f"✅ {page.upper()} loaded: {len(temp_cache)} images.")
+        except Exception as e: print(f"❌ Error {page}: {e}")
     FILES_LOADED = True
 
-def get_image_url(page_name, filename):
-    return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/images/{page_name}/{filename}"
+def get_image_url(page, filename):
+    return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{REPO_NAME}/{BRANCH}/images/{page}/{filename}"
 
-# --- ฟังก์ชันสั่งงาน Facebook (สลับ Token อัตโนมัติ) ---
+# --- 💬 3. FACEBOOK TOOLS ---
 def get_page_token(page_id):
-    if page_id == MAHABUCHA_PAGE_ID: return MAHABUCHA_TOKEN
-    elif page_id == MUTETEAM_PAGE_ID: return MUTETEAM_TOKEN
+    if str(page_id) == str(MAHABUCHA_PAGE_ID): return MAHABUCHA_TOKEN
+    if str(page_id) == str(MUTETEAM_PAGE_ID): return MUTETEAM_TOKEN
     return None
 
-def take_thread_control(recipient_id, page_id):
+def send_fb_action(recipient_id, page_id, data_type, payload):
     token = get_page_token(page_id)
     if not token: return
+    url = "https://graph.facebook.com/v19.0/me/messages"
     params = {"access_token": token}
-    data = {"recipient": {"id": recipient_id}}
-    requests.post("https://graph.facebook.com/v19.0/me/take_thread_control", params=params, json=data)
-
-def send_message(recipient_id, text, page_id):
-    token = get_page_token(page_id)
-    if not token: return
-    params = {"access_token": token}
-    data = {"recipient": {"id": recipient_id}, "message": {"text": text, "metadata": "BOT_SENT_THIS"}}
-    r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
     
-    if r.status_code != 200:
-        data_tag = {"recipient": {"id": recipient_id}, "messaging_type": "MESSAGE_TAG", "tag": "CONFIRMED_EVENT_UPDATE", "message": {"text": text, "metadata": "BOT_SENT_THIS"}}
-        requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data_tag)
+    if data_type == "text":
+        msg = {"text": payload, "metadata": "BOT_SENT_THIS"}
+    else: # image
+        msg = {"attachment": {"type": "image", "payload": {"url": payload, "is_reusable": True}}, "metadata": "BOT_SENT_THIS"}
+        
+    data = {"recipient": {"id": recipient_id}, "message": msg}
+    r = requests.post(url, params=params, json=data)
+    if r.status_code != 200: # Use Tag if failed
+        data["messaging_type"] = "MESSAGE_TAG"
+        data["tag"] = "CONFIRMED_EVENT_UPDATE"
+        requests.post(url, params=params, json=data)
 
-def send_image(recipient_id, image_url, page_id):
-    token = get_page_token(page_id)
-    if not token: return
-    params = {"access_token": token}
-    data = {"recipient": {"id": recipient_id}, "message": {"attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}}, "metadata": "BOT_SENT_THIS"}}
-    r = requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data)
-    
-    if r.status_code != 200:
-        data_tag = {"recipient": {"id": recipient_id}, "messaging_type": "MESSAGE_TAG", "tag": "CONFIRMED_EVENT_UPDATE", "message": {"attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}}, "metadata": "BOT_SENT_THIS"}}
-        requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, json=data_tag)
-
-# --- 2. LOGIC กรองรหัสสำหรับบอท Messenger ---
+# --- 🧠 4. MESSAGE PROCESSOR (NEW PATTERN) ---
 def process_message(target_id, text, page_id):
     global FILES_LOADED
+    page_name = "mahabucha" if str(page_id) == str(MAHABUCHA_PAGE_ID) else "muteteam" if str(page_id) == str(MUTETEAM_PAGE_ID) else None
+    if not page_name: return
+
+    # ✨ NEW REGEX PATTERN ✨
+    # 3ตัวเลข + 2ตัวอักษร + เลข01-20 + 3ตัวเลข (เช่น 123AB05456)
+    pattern_regex = r'\d{3}[a-z]{2}(?:0[1-9]|1[0-9]|20)\d{3}'
     
-    page_name = "mahabucha" if page_id == MAHABUCHA_PAGE_ID else "muteteam" if page_id == MUTETEAM_PAGE_ID else None
-    if not page_name: return 
-    
+    text_cleaned = text.lower().replace(" ", "")
+    valid_codes = re.findall(pattern_regex, text_cleaned)
+
+    # ถ้าไม่เจอรหัสตามแพทเทิร์นเลย ให้หยุด (นินจาโหมด)
+    if not valid_codes:
+        return
+
     if not FILES_LOADED:
         with lock:
-            if not FILES_LOADED:
-                take_thread_control(target_id, page_id)
-                send_message(target_id, "⏳ ระบบกำลังดึงข้อมูลภาพ กรุณารอสักครู่นะครับ...", page_id)
-                update_file_list()
-                if not FILES_LOADED:
-                    send_message(target_id, "❌ ขออภัยครับ ระบบดึงข้อมูลขัดข้อง รบกวนแจ้งแอดมินครับ 🙏", page_id)
-                    return
+            if not FILES_LOADED: update_file_list()
 
     current_cache = CACHED_FILES[page_name]
-
-    text_cleaned = text.lower().replace(" ", "")
-    exact_pattern = r'(?:269|999)[a-z0-9]{7}'
-    valid_codes = re.findall(exact_pattern, text_cleaned)
-    attempt_pattern = r'(?:269|999)[a-z0-9]*'
-    all_attempts = re.findall(attempt_pattern, text_cleaned)
-
-    found_actions = [] 
+    found_imgs = []
     unknown_codes = []
 
     for code in valid_codes:
         if code in current_cache:
-            if (code, current_cache[code]) not in found_actions:
-                found_actions.append((code, current_cache[code]))
+            found_imgs.append((code, current_cache[code]))
         else:
-            if code not in unknown_codes: unknown_codes.append(code)
+            unknown_codes.append(code)
 
-    for code in all_attempts:
-        if len(code) >= 5: 
-            if code not in valid_codes and code not in unknown_codes:
-                if code in current_cache:
-                    if (code, current_cache[code]) not in found_actions:
-                        found_actions.append((code, current_cache[code]))
-                else:
-                    unknown_codes.append(code)
-
-    if not found_actions and not unknown_codes: return 
-
-    if found_actions:
-        take_thread_control(target_id, page_id)
-        
-        # ข้อความตอบกลับแยกตามเพจ
-        if page_name == "mahabucha":
-            intro_msg = "📸 ขออนุญาตส่งภาพนะครับ\n\nรวมภาพงานพิธี กดได้ที่ link นี้\n\nsiamganesh-online.vercel.app\n\nหรือ รับชมได้ที่หน้าเพจ \"มหาบูชา\""
-        else:
-            intro_msg = "📸 ขออนุญาตส่งภาพนะครับ\n\nรวมภาพงานพิธี กดได้ที่ link นี้\n\nsiamganesh-online.vercel.app\n\nหรือ รับชมได้ที่หน้าเพจ \"มูเตทีม\""
-            
-        send_message(target_id, intro_msg, page_id)
-
-        for code_key, filename in found_actions:
-            send_message(target_id, f"ภาพถาดถวาย รหัส : {code_key.upper()}", page_id)
-            send_image(target_id, get_image_url(page_name, filename), page_id)
+    # ส่งคำนำ
+    if found_imgs:
+        intro = f"📸 ขออนุญาตส่งภาพนะครับ\n\nรวมภาพงานพิธี กดได้ที่ link นี้\n\nsiamganesh-online.vercel.app\n\nหรือ รับชมได้ที่หน้าเพจ \"{'มหาบูชา' if page_name == 'mahabucha' else 'มูเตทีม'}\""
+        send_fb_action(target_id, page_id, "text", intro)
+        for code_key, filename in found_imgs:
+            send_fb_action(target_id, page_id, "text", f"ภาพถาดถวาย รหัส : {code_key.upper()}")
+            send_fb_action(target_id, page_id, "image", get_image_url(page_name, filename))
 
     if unknown_codes:
-        take_thread_control(target_id, page_id)
         msg = "⚠️ ขออภัยครับ \n \nไม่พบภาพถาดถวายจากรหัสของท่าน \n \nรบกวนรอแอดมินเข้ามาตรวจสอบให้ ซักครู่นะครับ ⏳"
-        send_message(target_id, msg, page_id)
+        send_fb_action(target_id, page_id, "text", msg)
 
-# --- 3. API สำหรับ Web Vercel ---
+# --- 🌐 5. API ---
 @app.route('/api/search', methods=['GET'])
 def search_api():
     global FILES_LOADED
+    page = request.args.get('page', '').lower()
+    code = request.args.get('code', '').lower().strip()
     
-    page_param = request.args.get('page', '').strip().lower()
-    code = request.args.get('code', '').strip() 
-    
-    if page_param not in ["mahabucha", "muteteam"]:
-        return jsonify({"found": False, "message": "กรุณาระบุเพจที่ต้องการค้นหา (page=mahabucha หรือ page=muteteam)"}), 400
-        
-    if not code:
-        return jsonify({"found": False, "message": "กรุณาระบุรหัสที่ต้องการค้นหา"}), 400
-
-    if not re.match(r'^(269|999)[A-Za-z0-9]{7}$', code):
-        return jsonify({"found": False, "message": "รูปแบบรหัสไม่ถูกต้อง (ต้องมี 10 หลักพอดีเป๊ะ)"}), 400
+    if page not in ["mahabucha", "muteteam"] or not code:
+        return jsonify({"found": False, "message": "ข้อมูลไม่ครบ"}), 400
 
     if not FILES_LOADED:
         with lock:
-            if not FILES_LOADED:
-                update_file_list()
-                
-    if not FILES_LOADED:
-        return jsonify({"found": False, "message": "ระบบกำลังเตรียมข้อมูลจาก GitHub กรุณากดค้นหาอีกครั้ง"}), 503
+            if not FILES_LOADED: update_file_list()
 
-    matched_filename = None
-    code_lower = code.lower()
-    current_cache = CACHED_FILES.get(page_param, {})
-    
-    if code_lower in current_cache:
-        actual_filename = current_cache[code_lower]
-        exact_name_without_ext = actual_filename.rsplit('.', 1)[0]
-        
-        if exact_name_without_ext == code:
-            matched_filename = actual_filename
+    current_cache = CACHED_FILES.get(page, {})
+    if code in current_cache:
+        return jsonify({"found": True, "code": code.upper(), "image_url": get_image_url(page, current_cache[code])}), 200
+    return jsonify({"found": False, "message": "ไม่พบรูปภาพ"}), 404
 
-    if matched_filename:
-        image_url = get_image_url(page_param, matched_filename)
-        return jsonify({
-            "found": True, 
-            "code": code, 
-            "image_url": image_url,
-            "filename": matched_filename
-        }), 200
-    else:
-        return jsonify({"found": False, "message": "ไม่พบรูปภาพ (โปรดตรวจสอบตัวพิมพ์เล็ก-ใหญ่ให้ถูกต้อง)"}), 404
-
-# --- 4. WEBHOOK ของ Facebook ---
 @app.route('/', methods=['GET'])
 def verify():
-    if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
+    if request.args.get("hub.verify_token") == VERIFY_TOKEN:
         return request.args.get("hub.challenge"), 200
-    
-    html_page = """
-    <!DOCTYPE html>
-    <html lang="th">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Siamganesh Online Backend</title>
-        <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
-        <style>
-            body { font-family: 'Sarabun', sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; max-width: 450px; width: 90%; border-top: 5px solid #2c3e50; }
-            h1 { color: #2c3e50; margin-bottom: 10px; }
-            p { color: #555; font-size: 16px; line-height: 1.5; }
-            .status-badge { display: inline-block; background-color: #2ecc71; color: white; padding: 10px 20px; border-radius: 50px; font-weight: bold; font-size: 14px; margin-top: 20px; box-shadow: 0 2px 5px rgba(46, 204, 113, 0.4); }
-            .footer { margin-top: 30px; font-size: 12px; color: #aaa; }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>ศูนย์รวม API สยามคเณศ</h1>
-            <p>ระบบ Backend สำหรับจัดการแชทบอท มหาบูชา และ มูเตทีม</p>
-            <div class="status-badge">🟢 ระบบกำลังทำงาน (Online)</div>
-            <div class="footer">siamganesh-online-backend</div>
-        </div>
-    </body>
-    </html>
-    """
-    return html_page, 200
+    return "🟢 Siamganesh Online Backend (New Pattern) is Live", 200
 
 @app.route('/', methods=['POST'])
 def webhook():
     data = request.json
-    if data['object'] == 'page':
+    if data.get('object') == 'page':
         for entry in data['entry']:
-            page_id = entry.get('id') 
-            
+            p_id = entry.get('id')
             if 'messaging' in entry:
-                for event in entry['messaging']:
-                    if 'message' in event:
-                        text = event['message'].get('text', '')
-                        if event.get('message', {}).get('metadata') == "BOT_SENT_THIS": continue
-                        
-                        message_timestamp = event.get('timestamp')
-                        if message_timestamp:
-                            current_time = int(time.time() * 1000)
-                            time_diff_seconds = (current_time - message_timestamp) / 1000
-                            if time_diff_seconds > 300: 
-                                continue
-                        
-                        is_echo = event.get('message', {}).get('is_echo', False)
-                        if is_echo:
-                            if 'recipient' in event and 'id' in event['recipient']:
-                                process_message(event['recipient']['id'], text, page_id)
-                        else:
-                            process_message(event['sender']['id'], text, page_id)
+                for ev in entry['messaging']:
+                    if 'message' in ev and not ev['message'].get('is_echo'):
+                        if ev['message'].get('metadata') == "BOT_SENT_THIS": continue
+                        process_message(ev['sender']['id'], ev['message'].get('text', ''), p_id)
     return "ok", 200
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
